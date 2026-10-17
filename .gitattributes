@@ -1,0 +1,12 @@
+# Keep line endings correct across Windows (laptop) and Linux (Colab)
+*.sh  text eol=lf
+*.bat text eol=crlf
+*.cu  text eol=lf
+*.cuh text eol=lf
+*.h   text eol=lf
+*.cpp text eol=lf
+*.py  text eol=lf
+*.csv text eol=lf
+*.md  text eol=lf
+*.docx binary
+*.png  binary

@@ -1,0 +1,9 @@
+data/
+scratch/
+*.exe
+*.obj
+*.lib
+*.exp
+*.pdb
+convbench
+__pycache__/
