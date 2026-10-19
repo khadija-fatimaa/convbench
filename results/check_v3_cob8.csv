@@ -1,0 +1,7 @@
+config,version,pass,max_err
+T01,V3_direct,PASS,1.192093e-07
+T02,V3_direct,PASS,4.768372e-07
+T03,V3_direct,PASS,5.722046e-06
+T04,V3_direct,PASS,2.861023e-06
+T05,V3_direct,PASS,4.768372e-07
+T06,V3_direct,PASS,3.242493e-05

@@ -1,0 +1,20 @@
+﻿=== ConvBench Environment Report ===
+Date: 2026-10-19 23:30:20
+Hostname: FAIZAN_TANVEER
+
+--- GPU ---
+NVIDIA GeForce RTX 4050 Laptop GPU, 592.82, 6141 MiB
+
+--- PyTorch ---
+PyTorch 2.5.1+cu121, CUDA 12.1, cuDNN 90100, Device: NVIDIA GeForce RTX 4050 Laptop GPU
+
+--- CPU ---
+13th Gen Intel(R) Core(TM) i5-13420H
+Cores: 8
+Logical Processors: 12
+
+--- RAM ---
+15.6 GB
+
+--- OS ---
+Microsoft Windows 11 Home Build 26200

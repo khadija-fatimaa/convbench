@@ -1,0 +1,7 @@
+config,version,pass,max_err
+T01,V5_cudnn,PASS,1.192093e-07
+T02,V5_cudnn,PASS,4.768372e-07
+T03,V5_cudnn,PASS,5.722046e-06
+T04,V5_cudnn,PASS,2.861023e-06
+T05,V5_cudnn,PASS,4.768372e-07
+T06,V5_cudnn,PASS,3.242493e-05

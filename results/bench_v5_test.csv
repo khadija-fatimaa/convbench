@@ -1,0 +1,7 @@
+config,version,threads,v3cob,kernel_ms,e2e_pageable_ms,gflops_kernel,gflops_e2e
+T01,V5_cudnn,0,0,0.0952,0.2297,0.00,0.00
+T02,V5_cudnn,0,0,0.1178,0.8886,0.06,0.01
+T03,V5_cudnn,0,0,0.1597,0.2626,3.70,2.25
+T04,V5_cudnn,0,0,0.0806,0.2580,2.36,0.74
+T05,V5_cudnn,0,0,0.2210,0.1605,0.06,0.08
+T06,V5_cudnn,0,0,0.5775,0.9484,170.17,103.63

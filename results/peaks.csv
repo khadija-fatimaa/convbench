@@ -1,0 +1,11 @@
+metric,value,unit
+device,NVIDIA GeForce RTX 4050 Laptop GPU,
+sm_count,20,
+clock_mhz,1755,MHz
+mem_clock_mhz,8001,MHz
+bus_width,96,bits
+theo_bw,192.02,GB/s
+measured_bw,138.85,GB/s
+bw_median_ms,3.8666,ms
+measured_compute,2428.95,GFLOP/s
+compute_median_ms,0.1381,ms
