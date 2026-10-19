@@ -118,3 +118,45 @@ convbench.exe --configs configs/test.csv --versions 3 --v3cob 16 --mode check --
 2. **Execute Step 6:** Run CPU benchmarks (`results/A_cpu.csv`, `results/B_cpu.csv`) with thread scaling on i5-13420H.
 3. **Execute Step 7:** Run final GPU benchmarks on RTX 4050 (`results/A_gpu.csv`, `results/B_gpu.csv`) for V1–V5.
 4. **Execute Step 8:** Implement and generate figures (`fig01`–`fig07`) and tables (`tables/*.csv`).
+
+---
+
+## 8. Daily Session & Check-in Logs
+
+### Session Log: 19 October 2026 (Day 5 – Code Freeze & Verification)
+
+* **Session Date:** Monday 19 October 2026  
+* **Session Lead:** Faizan Tanveer  
+* **Protocol Checklist (Section 6.1):**
+  - [x] Charger plugged in continuously throughout session
+  - [x] OMEN Gaming Hub set to Performance Mode; Windows Settings set to Best Performance
+  - [x] Background applications closed; OneDrive sync and Windows Update paused
+  - [x] Screen and Sleep timeouts set to *Never* while plugged in
+  - [x] Laptop placed on a hard, flat surface with unimpeded cooling vents
+  - [x] Reference datasets verified in `data/` for Set A and Set B
+
+#### Hardware Telemetry at Session Start (from `results/session_log.txt`)
+```text
+19/10/2026 23:30:15
+name, driver_version, power.limit [W], temperature.gpu, clocks.max.sm [MHz]
+NVIDIA GeForce RTX 4050 Laptop GPU, 592.82, [N/A], 38, 3105 MHz
+```
+
+#### Daily 9:00 PM Check-in Meeting Summary (Day 5 Protocol)
+* **Faizan Tanveer (23L-0640):**
+  - **Finished:** Assembled portable CUDA 13.4 (`C:\cuda`) and Windows 11 SDK (`C:\winsdk`) environment. Implemented full test harness in `src/main.cu` (CLI parser, check mode, bench mode with pageable and pinned memory transfers, memory tracking via `cudaMemGetInfo`), peak hardware benchmarks in `src/peak.cu`, and `python/bench_cudnn.py` (V5 cuDNN benchmark with TF32 disabled per Section 4.10). Generated double-precision reference binary files in `data/` for Set A and Set B.
+  - **Blocked:** None.
+  - **Plan for Tomorrow (Day 6):** Run V3 COB tuning sweep on `configs/focus.csv`, followed by full CPU benchmarks (`A_cpu.csv`, `B_cpu.csv`) and final GPU benchmarks (`A_gpu.csv`, `B_gpu.csv`, `A_v5.csv`, `B_v5.csv`) on the RTX 4050 laptop.
+* **Mania Ali (23L-0876):**
+  - **Finished:** Implemented `src/gemm.cuh` including `gemm_simple` (16×16 shared-memory tile) and `gemm_opt` (64×64 tile, 16×16 thread block, 4×4 register tiling per thread with conflict-free transposed shared memory $A_s[16][64]$). Implemented `src/v1_im2col.cu` (grid-stride im2col kernel + GEMM dispatch), `src/v2_implicit.cu` (on-the-fly implicit GEMM via `Im2colLoader` with 0 workspace overhead), and `src/v4_cublas.cu` (im2col + `cublasSgemmStridedBatched` with row/column major transposition). All 4 versions verified 100% correct on test configs.
+  - **Blocked:** Waiting for Faizan's final benchmark CSV outputs to compute roofline metrics.
+  - **Plan for Tomorrow (Day 6):** Run `python/roofline.py` on Faizan's result CSVs to generate `figures/fig05_roofline.png` and `tables/roofline.csv`.
+* **Khadija Fatima (23L-0976):**
+  - **Finished:** Implemented single-core baseline `src/v6_cpu.cpp` and OpenMP multi-core `src/v7_omp.cpp`. Implemented direct convolution `src/v3_direct.cu` with both naive (`cob=0`) and tiled shared-memory kernels ($16 \times 16$ spatial tile with $CO_B \in \{4, 8, 16\}$ output channels per block). All kernels passed 100% correctness checks.
+  - **Blocked:** Waiting for Faizan's final benchmark CSV outputs to plot comparative graphs.
+  - **Plan for Tomorrow (Day 6):** Execute `python/plots.py` on Faizan's benchmark results to generate figures `fig01`–`fig04`, `fig06`, `fig07`, and tables `tab_correctness.csv`, `tab_setB.csv`, `tab_speedup.csv`, and `tab_crossover.csv`.
+
+#### Milestone Evaluation (Day 5 Code Freeze)
+* **Code Freeze Status:** **ACHIEVED & CONFIRMED**.
+* All 7 convolution versions (V1–V7) are implemented, compiled via `build.bat`, and validated with **42 / 42 passed tests** on `configs/test.csv`. Zero breaking changes or pending code modifications remain before starting final benchmark runs.
+
