@@ -29,7 +29,7 @@ struct Args {
     int threads  = 8;
     int warmup   = 3;
     int reps     = 10;
-    int v3cob    = 0;         // 0 = naive, 4/8/16 = tiled
+    int v3cob    = 16;        // 0 = naive, 4/8/16 = tiled (default 16 after tuning)
     bool peaks   = false;
 };
 
@@ -373,7 +373,7 @@ int main(int argc, char** argv) {
         fprintf(stderr, "  --threads N     CPU thread count for V7 (default 8)\n");
         fprintf(stderr, "  --warmup N      warmup iterations (default 3)\n");
         fprintf(stderr, "  --reps N        timed repetitions (default 10)\n");
-        fprintf(stderr, "  --v3cob N       V3 channel block: 0=naive, 4, 8, 16 (default 0)\n");
+        fprintf(stderr, "  --v3cob N       V3 channel block: 0=naive, 4, 8, 16 (default 16)\n");
         fprintf(stderr, "  --datadir DIR   reference data directory (default data)\n");
         fprintf(stderr, "  --peaks         run peak bandwidth/compute benchmark\n");
         return 1;

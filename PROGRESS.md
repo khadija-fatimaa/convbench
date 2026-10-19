@@ -16,8 +16,8 @@
 | **Step 2** | CPU Baseline & Direct Kernels | Khadija | **COMPLETED** | `src/v6_cpu.cpp` (C++ single-core), `src/v7_omp.cpp` (OpenMP), `src/v3_direct.cu` (Naive + Tiled) |
 | **Step 3** | Test Harness & Benchmarks | Faizan | **COMPLETED** | `src/main.cu`, `src/peak.cu`, `python/bench_cudnn.py` (V5 cuDNN, TF32 disabled), `build.bat` |
 | **Step 4** | Shared GEMM & Matrix Convolutions | Mania / Faizan | **COMPLETED** | `src/gemm.cuh` (`gemm_simple` + `gemm_opt`), `src/v1_im2col.cu` (V1), `src/v2_implicit.cu` (V2), `src/v4_cublas.cu` (V4) |
-| **Step 5** | V3 Tuning Sweep (COB Parameter) | Faizan | **IN PROGRESS** | Run `focus.csv` over COB = 4, 8, 16 -> set default in `src/main.cu` -> `results/tune_cob*.csv` |
-| **Step 6** | CPU Benchmark Sweeps | Faizan | *Pending Step 5* | V6 & V7 benchmarks over Set A and Set B (`results/A_cpu.csv`, `results/B_cpu.csv`) |
+| **Step 5** | V3 Tuning Sweep (COB Parameter) | Faizan | **COMPLETED** | Sweep on `focus.csv` over $CO_B \in \{4, 8, 16\}$, $CO_B=16$ selected as default in `main.cu` -> `results/tune_cob*.csv` |
+| **Step 6** | CPU Benchmark Sweeps | Faizan | **NEXT UP** | V6 & V7 benchmarks over Set A and Set B (`results/A_cpu.csv`, `results/B_cpu.csv`) |
 | **Step 7** | Final GPU Benchmark Sweeps | Faizan | *Pending Step 6* | V1–V5 benchmarks on RTX 4050 over Set A and Set B (`results/A_gpu.csv`, `results/B_gpu.csv`) |
 | **Step 8** | Analysis, Roofline & Plots | Mania & Khadija | *Pending Step 7* | `python/roofline.py` (`fig05_roofline.png`, `tables/roofline.csv`), `python/plots.py` (`fig01`–`fig07`, `tables/*.csv`) |
 | **Step 9** | Final Report Assembly & Submission | All | *Pending Step 8* | Word documents in `report/`, assembled final paper, clean zip bundle |
@@ -92,7 +92,22 @@ Evaluated on `configs/test.csv` (configurations `T01` to `T06`) against CPU doub
 
 ---
 
-## 6. Execution Command Log
+## 6. V3 Tuning Sweep Results (Section 6.3)
+
+Evaluated on `configs/focus.csv` (`A00`: $8 \times 64 \times 56 \times 56$, $64 \times 3 \times 3$; `B04`: $8 \times 256 \times 56 \times 56$, $256 \times 3 \times 3$) to select the optimal channel block size $CO_B$:
+
+| $CO_B$ Parameter | Config A00 Median Kernel (ms) | Config A00 GFLOP/s | Config B04 Median Kernel (ms) | Config B04 GFLOP/s | Sum of Medians (ms) | Speedup vs $CO_B=4$ |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **$CO_B = 4$** | 4.148 ms | 445.9 GFLOP/s | 48.741 ms | 607.2 GFLOP/s | 52.890 ms | 1.00× (Baseline) |
+| **$CO_B = 8$** | 1.994 ms | 927.8 GFLOP/s | 36.844 ms | 803.3 GFLOP/s | 38.837 ms | 1.36× |
+| **$CO_B = 16$ (WINNER)** | **1.851 ms** | **999.1 GFLOP/s** | **31.178 ms** | **949.2 GFLOP/s** | **33.029 ms** | **1.60×** |
+
+* **Selection Decision:** $CO_B = 16$ achieved the lowest sum of median kernel times (33.03 ms vs 38.84 ms for $CO_B=8$, an improvement of 17.6%). Per Section 6.3 rule, $CO_B = 16$ is selected and permanently configured as the default `--v3cob` in `src/main.cu`.
+* **Artifacts:** [`results/tune_cob4.csv`](results/tune_cob4.csv), [`results/tune_cob8.csv`](results/tune_cob8.csv), [`results/tune_cob16.csv`](results/tune_cob16.csv).
+
+---
+
+## 7. Execution Command Log
 
 ```cmd
 :: Build binary
@@ -113,15 +128,15 @@ convbench.exe --configs configs/test.csv --versions 3 --v3cob 16 --mode check --
 
 ---
 
-## 7. Next Actions & Schedule
-1. **Execute Step 5:** Run `configs/focus.csv` on V3 with COB $\in \{4, 8, 16\}$ to select optimal tiling parameter.
-2. **Execute Step 6:** Run CPU benchmarks (`results/A_cpu.csv`, `results/B_cpu.csv`) with thread scaling on i5-13420H.
-3. **Execute Step 7:** Run final GPU benchmarks on RTX 4050 (`results/A_gpu.csv`, `results/B_gpu.csv`) for V1–V5.
-4. **Execute Step 8:** Implement and generate figures (`fig01`–`fig07`) and tables (`tables/*.csv`).
+## 8. Next Actions & Schedule
+1. **Execute Step 6 (NEXT UP):** Run CPU benchmarks (`results/A_cpu.csv`, `results/B_cpu.csv`) with thread scaling ($T \in \{1, 4, 8, 12\}$) on i5-13420H.
+2. **Execute Step 7:** Run final GPU benchmarks on RTX 4050 (`results/A_gpu.csv`, `results/B_gpu.csv`, `results/A_v5.csv`, `results/B_v5.csv`) for V1–V5.
+3. **Execute Step 8:** Implement and generate figures (`fig01`–`fig07`) and tables (`tables/*.csv`).
+4. **Execute Step 9:** Draft and assemble final report sections.
 
 ---
 
-## 8. Daily Session & Check-in Logs
+## 9. Daily Session & Check-in Logs
 
 ### Session Log: 19 October 2026 (Day 5 – Code Freeze & Verification)
 
@@ -159,4 +174,24 @@ NVIDIA GeForce RTX 4050 Laptop GPU, 592.82, [N/A], 38, 3105 MHz
 #### Milestone Evaluation (Day 5 Code Freeze)
 * **Code Freeze Status:** **ACHIEVED & CONFIRMED**.
 * All 7 convolution versions (V1–V7) are implemented, compiled via `build.bat`, and validated with **42 / 42 passed tests** on `configs/test.csv`. Zero breaking changes or pending code modifications remain before starting final benchmark runs.
+
+---
+
+### Session Log: 20 October 2026 (Step 5: V3 Tuning Sweep Completed)
+
+* **Session Date:** Tuesday 20 October 2026 (02:27 PKT)  
+* **Session Lead:** Faizan Tanveer  
+* **Action:** Executed Step 5 parameter tuning sweep for V3 direct convolution across $CO_B \in \{4, 8, 16\}$ on `configs/focus.csv` (layers A00 and B04).
+* **Hardware Telemetry:**
+```text
+20/10/2026 02:27:08
+name, driver_version, power.limit [W], temperature.gpu, clocks.max.sm [MHz]
+NVIDIA GeForce RTX 4050 Laptop GPU, 592.82, [N/A], 39, 3105 MHz
+```
+* **Results:**
+  - $CO_B = 4$: Sum of medians = 52.89 ms (A00: 4.15 ms / 445.9 GFLOP/s; B04: 48.74 ms / 607.2 GFLOP/s)
+  - $CO_B = 8$: Sum of medians = 38.84 ms (A00: 1.99 ms / 927.8 GFLOP/s; B04: 36.84 ms / 803.3 GFLOP/s)
+  - $CO_B = 16$: Sum of medians = **33.03 ms** (A00: **1.85 ms / 999.1 GFLOP/s**; B04: **31.18 ms / 949.2 GFLOP/s**)
+* **Decision:** $CO_B = 16$ selected (17.6% faster than $CO_B = 8$); set as permanent default `--v3cob` in `src/main.cu`; `convbench.exe` rebuilt.
+
 

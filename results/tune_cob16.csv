@@ -1,0 +1,3 @@
+config,version,threads,v3cob,kernel_ms,e2e_pageable_ms,gflops_kernel,gflops_e2e
+A00,V3_direct,0,16,1.8514,7.7823,999.08,237.68
+B04,V3_direct,0,16,31.1777,50.0811,949.24,590.94

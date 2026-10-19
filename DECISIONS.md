@@ -9,4 +9,6 @@ Every decision agreed in the group chat, with its date.
 | 2026-10-19 | Step 1 & 3: Implemented test harness `src/main.cu`, peak benchmark `src/peak.cu`, and `python/bench_cudnn.py` (V5) with TF32 disabled. Generated reference datasets for Set A and Set B. |
 | 2026-10-19 | Step 4: Implemented shared GEMM in `src/gemm.cuh` (`gemm_simple` and `gemm_opt` per Section 5.1), `src/v1_im2col.cu` (V1), `src/v2_implicit.cu` (V2), and `src/v4_cublas.cu` (V4 cuBLAS strided batched). |
 | 2026-10-20 | Build & Test: Configured standalone CUDA 13.4 and Windows SDK toolchain in `build.bat`. Successfully compiled `convbench.exe`. Verified correctness of all versions (V1, V2, V3 naive & tiled, V4, V5, V6, V7) on `configs/test.csv` (42/42 PASS). Executed peak hardware benchmarks (`results/peaks.csv`). |
+| 2026-10-20 | V3 Tuning: Ran sweep on `configs/focus.csv` for $CO_B \in \{4, 8, 16\}$. Sum of median kernel times: $CO_B=4$ (52.89 ms), $CO_B=8$ (38.84 ms), $CO_B=16$ (33.03 ms). $CO_B=16$ is 17.6% faster than $CO_B=8$. Selected $CO_B = 16$ as permanent default in `src/main.cu`. |
+
 
