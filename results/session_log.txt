@@ -9,3 +9,48 @@ Session: Peak Hardware Benchmarks & 42-Test Correctness Check Suite Completed
 20/10/2026  2:27:09.60  
 name, driver_version, power.limit [W], temperature.gpu, clocks.max.sm [MHz]
 NVIDIA GeForce RTX 4050 Laptop GPU, 592.82, [N/A], 38, 3105 MHz
+07/11/2026 10:55:22
+Session: V3 tuning (rerun with fixed harness)
+name, driver_version, power.limit [W], temperature.gpu, clocks.max.sm [MHz]
+NVIDIA GeForce RTX 4050 Laptop GPU, 592.82, [N/A], 43, 3105 MHz
+        Current Power Limit                            : 42.15 W
+07/11/2026 11:05:47
+Session: Final GPU benchmarks
+name, driver_version, power.limit [W], temperature.gpu, clocks.max.sm [MHz]
+NVIDIA GeForce RTX 4050 Laptop GPU, 592.82, [N/A], 40, 3105 MHz
+        Current Power Limit                            : 50.00 W
+07/11/2026 11:26:50
+Session: Final CPU benchmarks
+name, driver_version, power.limit [W], temperature.gpu, clocks.max.sm [MHz]
+NVIDIA GeForce RTX 4050 Laptop GPU, 592.82, [N/A], 42, 3105 MHz
+        Current Power Limit                            : 43.67 W
+07/11/2026 12:20:10
+Session: Final CPU benchmarks, Set B: 1 warm-up, V7 threads 4,8,12; B04 also at 1 thread
+name, driver_version, power.limit [W], temperature.gpu, clocks.max.sm [MHz]
+NVIDIA GeForce RTX 4050 Laptop GPU, 592.82, [N/A], 57, 3105 MHz
+        Current Power Limit                            : 50.00 W
+07/11/2026 12:49:55
+Session: V3 tuning with GPU spin-up
+name, driver_version, power.limit [W], temperature.gpu, clocks.max.sm [MHz]
+NVIDIA GeForce RTX 4050 Laptop GPU, 592.82, [N/A], 46, 3105 MHz
+        Current Power Limit                            : 50.00 W
+07/11/2026 12:50:37
+Session: Final GPU benchmarks with GPU spin-up
+name, driver_version, power.limit [W], temperature.gpu, clocks.max.sm [MHz]
+NVIDIA GeForce RTX 4050 Laptop GPU, 592.82, [N/A], 48, 3105 MHz
+        Current Power Limit                            : 50.00 W
+07/11/2026 12:56:46
+Session: V3 tuning, spin-up with compute and memory load
+name, driver_version, power.limit [W], temperature.gpu, clocks.max.sm [MHz]
+NVIDIA GeForce RTX 4050 Laptop GPU, 592.82, [N/A], 42, 3105 MHz
+        Current Power Limit                            : 50.00 W
+07/11/2026 12:58:08
+Session: Final GPU benchmarks, spin-up with compute and memory load
+name, driver_version, power.limit [W], temperature.gpu, clocks.max.sm [MHz]
+NVIDIA GeForce RTX 4050 Laptop GPU, 592.82, [N/A], 42, 3105 MHz
+        Current Power Limit                            : 50.00 W
+07/11/2026 13:05:10
+Session: Repeat of the GPU benchmarks, for repeatability only
+name, driver_version, power.limit [W], temperature.gpu, clocks.max.sm [MHz]
+NVIDIA GeForce RTX 4050 Laptop GPU, 592.82, [N/A], 45, 3105 MHz
+        Current Power Limit                            : 50.00 W

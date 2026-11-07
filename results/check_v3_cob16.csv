@@ -1,7 +1,7 @@
-config,version,pass,max_err
-T01,V3_direct,PASS,1.192093e-07
-T02,V3_direct,PASS,4.768372e-07
-T03,V3_direct,PASS,5.722046e-06
-T04,V3_direct,PASS,2.861023e-06
-T05,V3_direct,PASS,4.768372e-07
-T06,V3_direct,PASS,3.242493e-05
+config_id,version,threads,status,kernel_ms_median,kernel_ms_min,kernel_ms_max,e2e_pageable_ms_median,e2e_pinned_ms_median,peak_mem_mb,memgetinfo_mb,max_abs_err
+T01,3,0,OK,NA,NA,NA,NA,NA,0.000225067,0,1.19209e-07
+T02,3,0,OK,NA,NA,NA,NA,NA,0.00236511,0,4.76837e-07
+T03,3,0,OK,NA,NA,NA,NA,NA,0.0188103,0,5.72205e-06
+T04,3,0,OK,NA,NA,NA,NA,NA,0.0102654,0,2.86102e-06
+T05,3,0,OK,NA,NA,NA,NA,NA,0.0119019,0,4.76837e-07
+T06,3,0,OK,NA,NA,NA,NA,NA,0.774193,0,3.24249e-05

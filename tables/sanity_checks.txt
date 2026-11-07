@@ -1,0 +1,49 @@
+1. Every row has status OK: PASS (0)
+2. No version exceeds the measured peaks: FAIL (2)
+      A06 V4: 175.7 GB/s
+      A06 V5: 180.8 GB/s
+3. V1 and V4 use at least as much memory as V2 and V3: PASS (0)
+4. memgetinfo_mb within 10% or 2 MB of peak_mem_mb: FAIL (20)
+      A00 V2: getinfo 16.0 vs 12.4 MB
+      A00 V3: getinfo 16.0 vs 12.4 MB
+      A04 V2: getinfo 28.0 vs 25.1 MB
+      A04 V3: getinfo 28.0 vs 25.1 MB
+      A06 V1: getinfo 24.0 vs 18.4 MB
+      A06 V2: getinfo 16.0 vs 12.3 MB
+      A06 V3: getinfo 16.0 vs 12.3 MB
+      A06 V4: getinfo 24.0 vs 18.4 MB
+      A07 V2: getinfo 16.0 vs 12.6 MB
+      A07 V3: getinfo 16.0 vs 12.6 MB
+      A08 V2: getinfo 16.0 vs 13.0 MB
+      A08 V3: getinfo 16.0 vs 13.0 MB
+      B01 V2: getinfo 28.0 vs 24.6 MB
+      B01 V3: getinfo 28.0 vs 24.6 MB
+      B03 V1: getinfo 40.0 vs 35.9 MB
+      B03 V2: getinfo 12.0 vs 8.4 MB
+      B03 V3: getinfo 12.0 vs 8.4 MB
+      B03 V4: getinfo 40.0 vs 35.9 MB
+      B06 V2: getinfo 18.0 vs 15.1 MB
+      B06 V3: getinfo 18.0 vs 15.1 MB
+5. V1 is not more than 1.5x faster than V4: PASS (0)
+6. None of our versions is more than 2x faster than V5: REVIEW (3)
+      B11 V1: 3.98x
+      B11 V2: 3.26x
+      B11 V4: 4.99x
+7. Every GPU version is over 10x faster than V6 on B02 and B04: PASS (0)
+8. Pinned end-to-end is lower than pageable: PASS (0)
+9. kernel_ms_max within 1.5x of the median: REVIEW (14)
+      B11 V1: max 0.0561, median 0.0193 ms
+      B12 V4: max 0.0922, median 0.0541 ms
+      A00 V5: max 0.416, median 0.225 ms
+      A01 V5: max 0.174, median 0.107 ms
+      A02 V5: max 0.247, median 0.0896 ms
+      A03 V5: max 0.187, median 0.066 ms
+      A06 V5: max 0.227, median 0.0711 ms
+      A09 V5: max 0.314, median 0.0517 ms
+      B03 V5: max 0.605, median 0.386 ms
+      B07 V5: max 0.233, median 0.0681 ms
+      B08 V5: max 0.562, median 0.37 ms
+      B09 V5: max 0.162, median 0.0543 ms
+      B11 V5: max 0.148, median 0.0768 ms
+      B12 V5: max 0.235, median 0.0435 ms
+wrote tables\sanity_checks.csv

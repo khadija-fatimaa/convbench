@@ -1,3 +1,3 @@
-config,version,threads,v3cob,kernel_ms,e2e_pageable_ms,gflops_kernel,gflops_e2e
-A00,V3_direct,0,4,4.1482,9.4980,445.90,194.75
-B04,V3_direct,0,4,48.7414,64.1246,607.18,461.52
+config_id,version,threads,status,kernel_ms_median,kernel_ms_min,kernel_ms_max,e2e_pageable_ms_median,e2e_pinned_ms_median,peak_mem_mb,memgetinfo_mb,max_abs_err
+A00,3,0,OK,2.46062,2.45747,2.48013,4.55965,3.64045,12.3906,16,4.19617e-05
+B04,3,0,OK,39.017,38.9827,39.382,47.7538,43.5624,51.25,56,0.000190735

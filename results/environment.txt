@@ -18,3 +18,8 @@ Logical Processors: 12
 
 --- OS ---
 Microsoft Windows 11 Home Build 26200
+
+--- Toolchain ---
+Python 3.11.0
+nvcc: NVIDIA (R) Cuda compiler driver
+Cuda compilation tools, release 13.4, V13.4.59

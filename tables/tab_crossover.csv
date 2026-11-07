@@ -1,0 +1,7 @@
+method,crossover_pageable_gflop,config_pageable,wins_all_larger_pageable,crossover_pinned_gflop,config_pinned,wins_all_larger_pinned
+Fastest of V1-V3,0.116,A01,True,0.116,A01,True
+V1 im2col + GEMM,0.116,A01,True,0.116,A01,True
+V2 implicit GEMM,0.116,A01,True,0.116,A01,True
+V3 direct,0.116,A01,True,0.116,A01,True
+V4 im2col + cuBLAS,0.116,A01,True,0.116,A01,True
+V5 cuDNN,0.116,A01,True,0.116,A01,True

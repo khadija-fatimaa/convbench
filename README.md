@@ -6,9 +6,11 @@ Members: Faizan Tanveer (23L-0640), Mania Ali (23L-0876), Khadija Fatima (23L-09
 
 ## Build
 
-Windows laptop (run in "x64 Native Tools Command Prompt for VS 2022" from the repository folder):
+Windows laptop (paths to CUDA, MSVC and the Windows SDK are set inside build.bat; edit them for another machine):
 
-    build.bat
+    .\build.bat
+
+The program needs `C:\cuda\bin` on PATH to find the cuBLAS DLL.
 
 Google Colab (T4 GPU runtime):
 
@@ -23,6 +25,25 @@ Data is written to data/ and is never committed.
 ## Run a check
 
     convbench --configs configs/test.csv --versions 3 --mode check --out scratch/check.csv
+
+## Run the benchmarks
+
+Follow Section 6 of the execution plan. Set A and Set B data must exist first.
+
+    convbench --peaks --out results/peaks.csv
+    convbench --configs configs/setA.csv --versions 6,7 --threads 1,4,8,12 --mode bench --out results/A_cpu.csv
+    convbench --configs configs/setB.csv --versions 6,7 --threads 1,4,8,12 --mode bench --out results/B_cpu.csv
+    convbench --configs configs/setA.csv --versions 1,2,3,4 --mode bench --out results/A_gpu.csv
+    convbench --configs configs/setB.csv --versions 1,2,3,4 --mode bench --out results/B_gpu.csv
+    py -3.11 python/bench_cudnn.py --configs configs/setA.csv --mode bench --out results/A_v5.csv
+    py -3.11 python/bench_cudnn.py --configs configs/setB.csv --mode bench --out results/B_v5.csv
+
+## Produce the figures and tables
+
+    py -3.11 python/roofline.py
+    py -3.11 python/plots.py
+    py -3.11 python/sanity_checks.py
+    py -3.11 python/repeatability.py
 
 ## Rules
 
