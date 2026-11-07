@@ -13,6 +13,7 @@ void v4_init() {
             fprintf(stderr, "cuBLAS create failed: %d\n", (int)st);
             exit(1);
         }
+        cublasSetMathMode(g_handle, CUBLAS_DEFAULT_MATH);   // FP32, no TF32
     }
 }
 

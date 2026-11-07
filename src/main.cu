@@ -1,11 +1,8 @@
 // src/main.cu -- test harness (owner: Faizan). Section 4.9.
-// Modes:
-//   check  – load reference data, run each version, compare element-wise
-//   bench  – warm up, then time kernel-only and end-to-end (pageable + pinned)
-// Usage:
-//   convbench --configs configs/test.csv --versions 1,2,3,4,6,7 --mode check --out results/check.csv
-//   convbench --configs configs/test.csv --versions 1,2,3 --mode bench --out results/bench.csv
+//   convbench --configs <csv> --versions <list> --mode check|bench --out <csv>
+//             [--data data] [--threads 1,4,8,12] [--warmup 5] [--reps 10] [--v3cob <0|4|8|16>]
 //   convbench --peaks --out results/peaks.csv
+// V5 is benchmarked by python/bench_cudnn.py, which writes the same CSV columns.
 #include "common.h"
 #include <cuda_runtime.h>
 #include <cstring>
@@ -16,6 +13,7 @@
 #include <fstream>
 #include <sstream>
 #include <algorithm>
+#include <limits>
 
 // ---------------------------------------------------------------------------
 // Command-line arguments
@@ -25,35 +23,43 @@ struct Args {
     std::string versions_str;
     std::string mode;         // "check" or "bench"
     std::string out;
-    std::string datadir = "data";
-    int threads  = 8;
-    int warmup   = 3;
-    int reps     = 10;
-    int v3cob    = 16;        // 0 = naive, 4/8/16 = tiled (default 16 after tuning)
-    bool peaks   = false;
+    std::string data = "data";
+    std::string threads_str = "12";
+    int warmup = 5;
+    int reps   = 10;
+    int v3cob  = 16;          // 0 = naive, 4/8/16 = tiled (16 after tuning)
+    bool peaks = false;
 };
+
+static void usage() {
+    fprintf(stderr,
+        "Usage: convbench --configs FILE --versions LIST --mode check|bench --out FILE\n"
+        "                 [--data DIR] [--threads 1,4,8,12] [--warmup N] [--reps N] [--v3cob 0|4|8|16]\n"
+        "       convbench --peaks --out FILE\n");
+}
 
 static Args parse_args(int argc, char** argv) {
     Args a;
     for (int i = 1; i < argc; ++i) {
         auto match = [&](const char* name) { return strcmp(argv[i], name) == 0; };
-        if (match("--configs")  && i+1 < argc) { a.configs  = argv[++i]; continue; }
+        if (match("--configs")  && i+1 < argc) { a.configs      = argv[++i]; continue; }
         if (match("--versions") && i+1 < argc) { a.versions_str = argv[++i]; continue; }
-        if (match("--mode")     && i+1 < argc) { a.mode     = argv[++i]; continue; }
-        if (match("--out")      && i+1 < argc) { a.out      = argv[++i]; continue; }
-        if (match("--datadir")  && i+1 < argc) { a.datadir  = argv[++i]; continue; }
-        if (match("--threads")  && i+1 < argc) { a.threads  = atoi(argv[++i]); continue; }
-        if (match("--warmup")   && i+1 < argc) { a.warmup   = atoi(argv[++i]); continue; }
-        if (match("--reps")     && i+1 < argc) { a.reps     = atoi(argv[++i]); continue; }
-        if (match("--v3cob")    && i+1 < argc) { a.v3cob    = atoi(argv[++i]); continue; }
+        if (match("--mode")     && i+1 < argc) { a.mode         = argv[++i]; continue; }
+        if (match("--out")      && i+1 < argc) { a.out          = argv[++i]; continue; }
+        if (match("--data")     && i+1 < argc) { a.data         = argv[++i]; continue; }
+        if (match("--threads")  && i+1 < argc) { a.threads_str  = argv[++i]; continue; }
+        if (match("--warmup")   && i+1 < argc) { a.warmup       = atoi(argv[++i]); continue; }
+        if (match("--reps")     && i+1 < argc) { a.reps         = atoi(argv[++i]); continue; }
+        if (match("--v3cob")    && i+1 < argc) { a.v3cob        = atoi(argv[++i]); continue; }
         if (match("--peaks"))   { a.peaks = true; continue; }
         fprintf(stderr, "Unknown argument: %s\n", argv[i]);
+        usage();
         exit(1);
     }
     return a;
 }
 
-static std::vector<int> parse_versions(const std::string& s) {
+static std::vector<int> parse_int_list(const std::string& s) {
     std::vector<int> v;
     std::istringstream ss(s);
     std::string tok;
@@ -64,7 +70,7 @@ static std::vector<int> parse_versions(const std::string& s) {
 }
 
 // ---------------------------------------------------------------------------
-// Config loader
+// Config and binary loaders
 // ---------------------------------------------------------------------------
 struct ConfigRow {
     std::string id;
@@ -78,23 +84,24 @@ static std::vector<ConfigRow> load_configs(const std::string& path) {
     std::string line;
     std::getline(f, line); // skip header
     while (std::getline(f, line)) {
-        if (line.empty()) continue;
+        if (line.empty() || line == "\r") continue;
         ConfigRow r;
-        // Replace commas with spaces for easy parsing
         for (char& c : line) if (c == ',') c = ' ';
         std::istringstream ss(line);
         ss >> r.id >> r.N >> r.Cin >> r.H >> r.W >> r.Cout >> r.K >> r.S >> r.P;
+        if (r.K > 7 || r.S > 2) {
+            fprintf(stderr, "Config %s has K=%d, S=%d: kernels require K <= 7 and S <= 2\n",
+                    r.id.c_str(), r.K, r.S);
+            exit(1);
+        }
         rows.push_back(r);
     }
     return rows;
 }
 
-// ---------------------------------------------------------------------------
-// Binary file loader
-// ---------------------------------------------------------------------------
 static std::vector<float> load_bin(const std::string& path, size_t expected_elems) {
     FILE* f = fopen(path.c_str(), "rb");
-    if (!f) { fprintf(stderr, "Cannot open %s\n", path.c_str()); exit(1); }
+    if (!f) { fprintf(stderr, "Missing data file: %s\n", path.c_str()); exit(1); }
     std::vector<float> buf(expected_elems);
     size_t got = fread(buf.data(), sizeof(float), expected_elems, f);
     fclose(f);
@@ -106,253 +113,290 @@ static std::vector<float> load_bin(const std::string& path, size_t expected_elem
 }
 
 // ---------------------------------------------------------------------------
-// Correctness check: |out - ref| <= atol + rtol * |ref|
+// Correctness rule (Section 4.8): |out - ref| <= 0.001 + 0.001 * |ref|
 // ---------------------------------------------------------------------------
-static bool check_output(const float* out, const float* ref, size_t n,
-                          float atol, float rtol, float& max_err) {
-    max_err = 0.0f;
+static bool check_output(const float* out, const float* ref, size_t n, double& max_err) {
+    max_err = 0.0;
     bool pass = true;
     for (size_t i = 0; i < n; ++i) {
-        float err = fabsf(out[i] - ref[i]);
-        float tol = atol + rtol * fabsf(ref[i]);
-        if (err > tol) { pass = false; }
-        if (err > max_err) max_err = err;
+        double err = fabs((double)out[i] - (double)ref[i]);
+        double tol = 0.001 + 0.001 * fabs((double)ref[i]);
+        if (!(err <= tol)) pass = false;      // written this way so NaN fails
+        if (!(err <= max_err)) max_err = err;
     }
     return pass;
 }
 
+// Median: for an even count, the average of the two middle values.
+static double median_of(std::vector<double> v) {
+    std::sort(v.begin(), v.end());
+    size_t n = v.size();
+    if (n == 0) return std::numeric_limits<double>::quiet_NaN();
+    return (n % 2) ? v[n / 2] : 0.5 * (v[n / 2 - 1] + v[n / 2]);
+}
+
 // ---------------------------------------------------------------------------
-// Version name helper
+// CSV output, Table 5. NaN in a numeric field is written as NA.
 // ---------------------------------------------------------------------------
-static const char* version_name(int v) {
-    switch (v) {
-        case 1: return "V1_im2col";
-        case 2: return "V2_implicit";
-        case 3: return "V3_direct";
-        case 4: return "V4_cublas";
-        case 6: return "V6_cpu";
-        case 7: return "V7_omp";
-        default: return "unknown";
+static const double NA = std::numeric_limits<double>::quiet_NaN();
+
+struct Row {
+    std::string config_id;
+    int version = 0, threads = 0;
+    std::string status = "OK";
+    double kmed = NA, kmin = NA, kmax = NA;
+    double e2e_pageable = NA, e2e_pinned = NA;
+    double peak_mem_mb = NA, memgetinfo_mb = NA;
+    double max_abs_err = NA;
+};
+
+static void put_num(FILE* f, double v) {
+    if (std::isnan(v)) fprintf(f, ",NA");
+    else               fprintf(f, ",%.6g", v);
+}
+
+static void write_row(FILE* f, const Row& r) {
+    printf("  V%d%s: %s", r.version,
+           r.threads ? (" t=" + std::to_string(r.threads)).c_str() : "", r.status.c_str());
+    if (!std::isnan(r.kmed))        printf("  kernel=%.3f ms", r.kmed);
+    if (!std::isnan(r.e2e_pinned))  printf("  e2e=%.3f/%.3f ms", r.e2e_pageable, r.e2e_pinned);
+    if (!std::isnan(r.peak_mem_mb)) printf("  mem=%.1f MB (getinfo %.1f)", r.peak_mem_mb, r.memgetinfo_mb);
+    if (!std::isnan(r.max_abs_err)) printf("  max_err=%.3e", r.max_abs_err);
+    printf("\n");
+    fflush(stdout);
+
+    if (!f) return;
+    fprintf(f, "%s,%d,%d,%s", r.config_id.c_str(), r.version, r.threads, r.status.c_str());
+    put_num(f, r.kmed); put_num(f, r.kmin); put_num(f, r.kmax);
+    put_num(f, r.e2e_pageable); put_num(f, r.e2e_pinned);
+    put_num(f, r.peak_mem_mb); put_num(f, r.memgetinfo_mb);
+    put_num(f, r.max_abs_err);
+    fprintf(f, "\n");
+    fflush(f);     // keep completed rows if a long run is interrupted
+}
+
+// ---------------------------------------------------------------------------
+// Version dispatch
+// ---------------------------------------------------------------------------
+static size_t workspace_bytes(int ver, const ConvParams& p) {
+    switch (ver) {
+        case 1: return v1_workspace_bytes(p);
+        case 2: return v2_workspace_bytes(p);
+        case 3: return v3_workspace_bytes(p);
+        case 4: return v4_workspace_bytes(p);
+    }
+    return 0;
+}
+
+static void run_gpu(int ver, const ConvParams& p, const float* in, const float* w,
+                    float* out, float* ws) {
+    switch (ver) {
+        case 1: v1_run(p, in, w, out, ws); break;
+        case 2: v2_run(p, in, w, out, ws); break;
+        case 3: v3_run(p, in, w, out, ws); break;
+        case 4: v4_run(p, in, w, out, ws); break;
     }
 }
 
 // ---------------------------------------------------------------------------
-// Run a GPU version: allocate device memory, copy in, run, copy out
+// Device buffers. cudaMalloc failure is reported, not fatal: OOM is a result.
 // ---------------------------------------------------------------------------
-static void run_gpu_version(int ver, const ConvParams& p,
-                            const float* h_in, const float* h_w,
-                            float* h_out) {
-    size_t in_bytes  = input_elems(p) * sizeof(float);
+struct DeviceBuffers {
+    float* in = nullptr; float* w = nullptr; float* out = nullptr; float* ws = nullptr;
+
+    void release() {
+        if (ws)  cudaFree(ws);
+        if (out) cudaFree(out);
+        if (w)   cudaFree(w);
+        if (in)  cudaFree(in);
+        ws = out = w = in = nullptr;
+    }
+};
+
+static bool try_alloc(float** ptr, size_t bytes) {
+    cudaError_t e = cudaMalloc(ptr, bytes);
+    if (e == cudaSuccess) return true;
+    *ptr = nullptr;
+    if (e != cudaErrorMemoryAllocation) {
+        fprintf(stderr, "cudaMalloc error: %s\n", cudaGetErrorString(e));
+        exit(1);
+    }
+    cudaGetLastError();   // clear the error
+    return false;
+}
+
+static bool alloc_buffers(DeviceBuffers& b, size_t in_bytes, size_t w_bytes,
+                          size_t out_bytes, size_t ws_bytes) {
+    bool ok = try_alloc(&b.in, in_bytes) && try_alloc(&b.w, w_bytes)
+           && try_alloc(&b.out, out_bytes)
+           && (ws_bytes == 0 || try_alloc(&b.ws, ws_bytes));
+    if (!ok) b.release();
+    return ok;
+}
+
+// ---------------------------------------------------------------------------
+// End-to-end time (pageable or pinned, depending on the host buffers passed in)
+// ---------------------------------------------------------------------------
+static double e2e_median(int ver, const ConvParams& p, const DeviceBuffers& d,
+                         const float* h_in, const float* h_w, float* h_out,
+                         size_t in_bytes, size_t w_bytes, size_t out_bytes,
+                         int warmup, int reps) {
+    std::vector<double> times;
+    times.reserve(reps);
+    for (int i = 0; i < warmup + reps; ++i) {
+        auto t0 = std::chrono::steady_clock::now();
+        CUDA_CHECK(cudaMemcpy(d.in, h_in, in_bytes, cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(d.w,  h_w,  w_bytes,  cudaMemcpyHostToDevice));
+        run_gpu(ver, p, d.in, d.w, d.out, d.ws);
+        CUDA_CHECK(cudaMemcpy(h_out, d.out, out_bytes, cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaDeviceSynchronize());
+        auto t1 = std::chrono::steady_clock::now();
+        CUDA_CHECK(cudaGetLastError());
+        if (i >= warmup)
+            times.push_back(std::chrono::duration<double, std::milli>(t1 - t0).count());
+    }
+    return median_of(times);
+}
+
+// GPU spin-up before timing: the first config must not run at idle clocks.
+static const double START_SPINUP_S = 3.0, ROW_SPINUP_S = 0.5;
+
+// ---------------------------------------------------------------------------
+// One GPU version on one config (Section 4.9, steps 2 to 11)
+// ---------------------------------------------------------------------------
+static Row do_gpu(int ver, const ConfigRow& cfg, const ConvParams& p,
+                  const float* h_in, const float* h_w, const float* h_ref,
+                  bool bench, int warmup, int reps) {
+    Row r;
+    r.config_id = cfg.id;
+    r.version = ver;
+
+    size_t in_bytes  = input_elems(p)  * sizeof(float);
     size_t w_bytes   = weight_elems(p) * sizeof(float);
     size_t out_bytes = output_elems(p) * sizeof(float);
+    size_t ws_bytes  = workspace_bytes(ver, p);
 
-    // Workspace
-    size_t ws_bytes = 0;
-    switch (ver) {
-        case 1: ws_bytes = v1_workspace_bytes(p); break;
-        case 2: ws_bytes = v2_workspace_bytes(p); break;
-        case 3: ws_bytes = v3_workspace_bytes(p); break;
-        case 4: ws_bytes = v4_workspace_bytes(p); break;
+    size_t free_before = 0, free_after = 0, total = 0;
+    CUDA_CHECK(cudaMemGetInfo(&free_before, &total));
+
+    DeviceBuffers d;
+    if (!alloc_buffers(d, in_bytes, w_bytes, out_bytes, ws_bytes)) {
+        r.status = "OOM";
+        return r;
     }
 
-    float *d_in = nullptr, *d_w = nullptr, *d_out = nullptr, *d_ws = nullptr;
-    CUDA_CHECK(cudaMalloc(&d_in,  in_bytes));
-    CUDA_CHECK(cudaMalloc(&d_w,   w_bytes));
-    CUDA_CHECK(cudaMalloc(&d_out, out_bytes));
-    if (ws_bytes > 0) CUDA_CHECK(cudaMalloc(&d_ws, ws_bytes));
+    CUDA_CHECK(cudaMemGetInfo(&free_after, &total));
+    r.memgetinfo_mb = ((double)free_before - (double)free_after) / 1048576.0;
+    r.peak_mem_mb   = (double)(in_bytes + w_bytes + out_bytes + ws_bytes) / 1048576.0;
 
-    CUDA_CHECK(cudaMemcpy(d_in, h_in, in_bytes, cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(d_w,  h_w,  w_bytes,  cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemset(d_out, 0, out_bytes));
+    CUDA_CHECK(cudaMemcpy(d.in, h_in, in_bytes, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d.w,  h_w,  w_bytes,  cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemset(d.out, 0, out_bytes));   // untimed; a stale buffer must not pass the check
 
-    switch (ver) {
-        case 1: v1_run(p, d_in, d_w, d_out, d_ws); break;
-        case 2: v2_run(p, d_in, d_w, d_out, d_ws); break;
-        case 3: v3_run(p, d_in, d_w, d_out, d_ws); break;
-        case 4: v4_run(p, d_in, d_w, d_out, d_ws); break;
-    }
-    CUDA_CHECK(cudaDeviceSynchronize());
+    std::vector<float> h_out(output_elems(p));
 
-    CUDA_CHECK(cudaMemcpy(h_out, d_out, out_bytes, cudaMemcpyDeviceToHost));
-
-    if (d_ws) cudaFree(d_ws);
-    cudaFree(d_out);
-    cudaFree(d_w);
-    cudaFree(d_in);
-}
-
-// ---------------------------------------------------------------------------
-// Run a CPU version
-// ---------------------------------------------------------------------------
-static void run_cpu_version(int ver, const ConvParams& p,
-                            const float* h_in, const float* h_w,
-                            float* h_out, int threads) {
-    memset(h_out, 0, output_elems(p) * sizeof(float));
-    switch (ver) {
-        case 6: v6_run(p, h_in, h_w, h_out); break;
-        case 7: v7_run(p, h_in, h_w, h_out, threads); break;
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Bench a GPU version: returns kernel-only time in ms (median of reps)
-// ---------------------------------------------------------------------------
-static double bench_gpu_kernel(int ver, const ConvParams& p,
-                               const float* d_in, const float* d_w,
-                               float* d_out, float* d_ws,
-                               int warmup, int reps) {
-    cudaEvent_t start, stop;
-    CUDA_CHECK(cudaEventCreate(&start));
-    CUDA_CHECK(cudaEventCreate(&stop));
-
-    auto run_ver = [&]() {
-        CUDA_CHECK(cudaMemset(d_out, 0, output_elems(p) * sizeof(float)));
-        switch (ver) {
-            case 1: v1_run(p, d_in, d_w, d_out, d_ws); break;
-            case 2: v2_run(p, d_in, d_w, d_out, d_ws); break;
-            case 3: v3_run(p, d_in, d_w, d_out, d_ws); break;
-            case 4: v4_run(p, d_in, d_w, d_out, d_ws); break;
+    if (!bench) {
+        run_gpu(ver, p, d.in, d.w, d.out, d.ws);
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaDeviceSynchronize());
+    } else {
+        gpu_spinup(ROW_SPINUP_S);
+        for (int i = 0; i < warmup; ++i) {
+            run_gpu(ver, p, d.in, d.w, d.out, d.ws);
+            CUDA_CHECK(cudaGetLastError());
         }
+        CUDA_CHECK(cudaDeviceSynchronize());
+
+        cudaEvent_t start, stop;
+        CUDA_CHECK(cudaEventCreate(&start));
+        CUDA_CHECK(cudaEventCreate(&stop));
+        std::vector<double> times;
+        times.reserve(reps);
+        for (int i = 0; i < reps; ++i) {
+            CUDA_CHECK(cudaEventRecord(start));
+            run_gpu(ver, p, d.in, d.w, d.out, d.ws);
+            CUDA_CHECK(cudaEventRecord(stop));
+            CUDA_CHECK(cudaEventSynchronize(stop));
+            float ms = 0.0f;
+            CUDA_CHECK(cudaEventElapsedTime(&ms, start, stop));
+            CUDA_CHECK(cudaGetLastError());
+            times.push_back(ms);
+        }
+        CUDA_CHECK(cudaEventDestroy(start));
+        CUDA_CHECK(cudaEventDestroy(stop));
+
+        r.kmed = median_of(times);
+        r.kmin = *std::min_element(times.begin(), times.end());
+        r.kmax = *std::max_element(times.begin(), times.end());
+    }
+
+    CUDA_CHECK(cudaMemcpy(h_out.data(), d.out, out_bytes, cudaMemcpyDeviceToHost));
+    bool pass = check_output(h_out.data(), h_ref, output_elems(p), r.max_abs_err);
+    r.status = pass ? "OK" : "FAIL";
+
+    if (bench) {
+        // End-to-end, pageable: ordinary host buffers.
+        std::vector<float> pg_in(h_in, h_in + input_elems(p));
+        std::vector<float> pg_w(h_w, h_w + weight_elems(p));
+        std::vector<float> pg_out(output_elems(p));
+        r.e2e_pageable = e2e_median(ver, p, d, pg_in.data(), pg_w.data(), pg_out.data(),
+                                    in_bytes, w_bytes, out_bytes, warmup, reps);
+
+        // End-to-end, pinned: host buffers from cudaMallocHost.
+        float *pin_in = nullptr, *pin_w = nullptr, *pin_out = nullptr;
+        CUDA_CHECK(cudaMallocHost(&pin_in,  in_bytes));
+        CUDA_CHECK(cudaMallocHost(&pin_w,   w_bytes));
+        CUDA_CHECK(cudaMallocHost(&pin_out, out_bytes));
+        memcpy(pin_in, h_in, in_bytes);
+        memcpy(pin_w,  h_w,  w_bytes);
+        r.e2e_pinned = e2e_median(ver, p, d, pin_in, pin_w, pin_out,
+                                  in_bytes, w_bytes, out_bytes, warmup, reps);
+        CUDA_CHECK(cudaFreeHost(pin_out));
+        CUDA_CHECK(cudaFreeHost(pin_w));
+        CUDA_CHECK(cudaFreeHost(pin_in));
+    }
+
+    d.release();
+    return r;
+}
+
+// ---------------------------------------------------------------------------
+// One CPU version on one config
+// ---------------------------------------------------------------------------
+static Row do_cpu(int ver, int threads, const ConfigRow& cfg, const ConvParams& p,
+                  const float* h_in, const float* h_w, const float* h_ref,
+                  bool bench, int warmup, int reps) {
+    Row r;
+    r.config_id = cfg.id;
+    r.version = ver;
+    r.threads = (ver == 7) ? threads : 0;
+
+    std::vector<float> h_out(output_elems(p), 0.0f);
+    auto run = [&]() {
+        if (ver == 6) v6_run(p, h_in, h_w, h_out.data());
+        else          v7_run(p, h_in, h_w, h_out.data(), threads);
     };
 
-    // Warmup
-    for (int i = 0; i < warmup; ++i) { run_ver(); }
-    CUDA_CHECK(cudaDeviceSynchronize());
-
-    // Timed runs
-    std::vector<float> times(reps);
-    for (int i = 0; i < reps; ++i) {
-        CUDA_CHECK(cudaEventRecord(start));
-        run_ver();
-        CUDA_CHECK(cudaEventRecord(stop));
-        CUDA_CHECK(cudaEventSynchronize(stop));
-        CUDA_CHECK(cudaEventElapsedTime(&times[i], start, stop));
-    }
-
-    CUDA_CHECK(cudaEventDestroy(start));
-    CUDA_CHECK(cudaEventDestroy(stop));
-
-    std::sort(times.begin(), times.end());
-    return (double)times[reps / 2];
-}
-
-// ---------------------------------------------------------------------------
-// Bench a GPU version: end-to-end (pageable host memory)
-// ---------------------------------------------------------------------------
-static double bench_gpu_e2e_pageable(int ver, const ConvParams& p,
-                                     const float* h_in, const float* h_w,
-                                     float* h_out,
-                                     int warmup, int reps) {
-    size_t in_bytes  = input_elems(p) * sizeof(float);
-    size_t w_bytes   = weight_elems(p) * sizeof(float);
-    size_t out_bytes = output_elems(p) * sizeof(float);
-    size_t ws_bytes  = 0;
-    switch (ver) {
-        case 1: ws_bytes = v1_workspace_bytes(p); break;
-        case 2: ws_bytes = v2_workspace_bytes(p); break;
-        case 3: ws_bytes = v3_workspace_bytes(p); break;
-        case 4: ws_bytes = v4_workspace_bytes(p); break;
-    }
-
-    float *d_in, *d_w, *d_out, *d_ws = nullptr;
-    CUDA_CHECK(cudaMalloc(&d_in,  in_bytes));
-    CUDA_CHECK(cudaMalloc(&d_w,   w_bytes));
-    CUDA_CHECK(cudaMalloc(&d_out, out_bytes));
-    if (ws_bytes > 0) CUDA_CHECK(cudaMalloc(&d_ws, ws_bytes));
-
-    auto run_e2e = [&]() {
-        CUDA_CHECK(cudaMemcpy(d_in, h_in, in_bytes, cudaMemcpyHostToDevice));
-        CUDA_CHECK(cudaMemcpy(d_w,  h_w,  w_bytes,  cudaMemcpyHostToDevice));
-        switch (ver) {
-            case 1: v1_run(p, d_in, d_w, d_out, d_ws); break;
-            case 2: v2_run(p, d_in, d_w, d_out, d_ws); break;
-            case 3: v3_run(p, d_in, d_w, d_out, d_ws); break;
-            case 4: v4_run(p, d_in, d_w, d_out, d_ws); break;
+    if (!bench) {
+        run();
+    } else {
+        std::vector<double> times;
+        times.reserve(reps);
+        for (int i = 0; i < warmup + reps; ++i) {
+            auto t0 = std::chrono::steady_clock::now();
+            run();
+            auto t1 = std::chrono::steady_clock::now();
+            if (i >= warmup)
+                times.push_back(std::chrono::duration<double, std::milli>(t1 - t0).count());
         }
-        CUDA_CHECK(cudaMemcpy(h_out, d_out, out_bytes, cudaMemcpyDeviceToHost));
-    };
-
-    // Warmup
-    for (int i = 0; i < warmup; ++i) run_e2e();
-
-    cudaEvent_t start, stop;
-    CUDA_CHECK(cudaEventCreate(&start));
-    CUDA_CHECK(cudaEventCreate(&stop));
-
-    std::vector<float> times(reps);
-    for (int i = 0; i < reps; ++i) {
-        CUDA_CHECK(cudaEventRecord(start));
-        run_e2e();
-        CUDA_CHECK(cudaEventRecord(stop));
-        CUDA_CHECK(cudaEventSynchronize(stop));
-        CUDA_CHECK(cudaEventElapsedTime(&times[i], start, stop));
+        r.kmed = median_of(times);
+        r.kmin = *std::min_element(times.begin(), times.end());
+        r.kmax = *std::max_element(times.begin(), times.end());
     }
 
-    CUDA_CHECK(cudaEventDestroy(start));
-    CUDA_CHECK(cudaEventDestroy(stop));
-    if (d_ws) cudaFree(d_ws);
-    cudaFree(d_out); cudaFree(d_w); cudaFree(d_in);
-
-    std::sort(times.begin(), times.end());
-    return (double)times[reps / 2];
-}
-
-// ---------------------------------------------------------------------------
-// Bench a CPU version: returns wall-clock time in ms (median of reps)
-// ---------------------------------------------------------------------------
-static double bench_cpu(int ver, const ConvParams& p,
-                        const float* h_in, const float* h_w,
-                        float* h_out, int threads,
-                        int warmup, int reps) {
-    auto run_ver = [&]() {
-        memset(h_out, 0, output_elems(p) * sizeof(float));
-        switch (ver) {
-            case 6: v6_run(p, h_in, h_w, h_out); break;
-            case 7: v7_run(p, h_in, h_w, h_out, threads); break;
-        }
-    };
-
-    for (int i = 0; i < warmup; ++i) run_ver();
-
-    std::vector<double> times(reps);
-    for (int i = 0; i < reps; ++i) {
-        auto t0 = std::chrono::high_resolution_clock::now();
-        run_ver();
-        auto t1 = std::chrono::high_resolution_clock::now();
-        times[i] = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    }
-
-    std::sort(times.begin(), times.end());
-    return times[reps / 2];
-}
-
-// ---------------------------------------------------------------------------
-// FLOPs for a convolution: 2 * N * Cout * Ho * Wo * Cin * K * K
-// ---------------------------------------------------------------------------
-static double conv_flops(const ConvParams& p) {
-    return 2.0 * p.N * p.Cout * p.Ho * p.Wo * p.Cin * p.K * p.K;
-}
-
-// ---------------------------------------------------------------------------
-// Memory check: can we fit this config on the GPU?
-// ---------------------------------------------------------------------------
-static bool check_gpu_memory(const ConvParams& p, int ver) {
-    size_t in_bytes  = input_elems(p) * sizeof(float);
-    size_t w_bytes   = weight_elems(p) * sizeof(float);
-    size_t out_bytes = output_elems(p) * sizeof(float);
-    size_t ws_bytes  = 0;
-    switch (ver) {
-        case 1: ws_bytes = v1_workspace_bytes(p); break;
-        case 2: ws_bytes = v2_workspace_bytes(p); break;
-        case 3: ws_bytes = v3_workspace_bytes(p); break;
-        case 4: ws_bytes = v4_workspace_bytes(p); break;
-    }
-    size_t total_needed = in_bytes + w_bytes + out_bytes + ws_bytes;
-
-    size_t free_mem = 0, total_mem = 0;
-    CUDA_CHECK(cudaMemGetInfo(&free_mem, &total_mem));
-    // Leave a 64 MiB safety margin
-    return total_needed + 64 * 1024 * 1024 < free_mem;
+    bool pass = check_output(h_out.data(), h_ref, output_elems(p), r.max_abs_err);
+    r.status = pass ? "OK" : "FAIL";
+    return r;
 }
 
 // ===================================================================
@@ -361,182 +405,83 @@ static bool check_gpu_memory(const ConvParams& p, int ver) {
 int main(int argc, char** argv) {
     Args a = parse_args(argc, argv);
 
-    // --peaks mode
     if (a.peaks) {
         if (a.out.empty()) { fprintf(stderr, "--peaks requires --out\n"); return 1; }
         run_peaks(a.out.c_str());
         return 0;
     }
 
-    if (a.configs.empty() || a.versions_str.empty() || a.mode.empty()) {
-        fprintf(stderr, "Usage: convbench --configs FILE --versions LIST --mode check|bench --out FILE [options]\n");
-        fprintf(stderr, "  --threads N     CPU thread count for V7 (default 8)\n");
-        fprintf(stderr, "  --warmup N      warmup iterations (default 3)\n");
-        fprintf(stderr, "  --reps N        timed repetitions (default 10)\n");
-        fprintf(stderr, "  --v3cob N       V3 channel block: 0=naive, 4, 8, 16 (default 16)\n");
-        fprintf(stderr, "  --datadir DIR   reference data directory (default data)\n");
-        fprintf(stderr, "  --peaks         run peak bandwidth/compute benchmark\n");
+    if (a.configs.empty() || a.versions_str.empty() ||
+        (a.mode != "check" && a.mode != "bench")) {
+        usage();
+        return 1;
+    }
+    if (a.v3cob != 0 && a.v3cob != 4 && a.v3cob != 8 && a.v3cob != 16) {
+        fprintf(stderr, "--v3cob must be 0, 4, 8 or 16\n");
         return 1;
     }
 
-    std::vector<int> versions = parse_versions(a.versions_str);
+    std::vector<int> versions = parse_int_list(a.versions_str);
+    std::vector<int> thread_counts = parse_int_list(a.threads_str);
     std::vector<ConfigRow> configs = load_configs(a.configs);
+    bool bench = (a.mode == "bench");
 
-    // Set V3 COB
+    for (int v : versions) {
+        if (v == 5) { fprintf(stderr, "V5 is run by python/bench_cudnn.py\n"); return 1; }
+        if (v < 1 || v > 7) { fprintf(stderr, "Unknown version %d\n", v); return 1; }
+    }
+    if (thread_counts.empty()) { fprintf(stderr, "--threads is empty\n"); return 1; }
+
     v3_set_cob(a.v3cob);
+    v4_init();
 
-    // Init cuBLAS if V4 is requested
-    bool need_v4 = false;
-    for (int v : versions) if (v == 4) { need_v4 = true; break; }
-    if (need_v4) v4_init();
-
-    // Open output CSV
     FILE* fout = nullptr;
     if (!a.out.empty()) {
         fout = fopen(a.out.c_str(), "w");
         if (!fout) { fprintf(stderr, "Cannot open output file: %s\n", a.out.c_str()); return 1; }
+        fprintf(fout, "config_id,version,threads,status,kernel_ms_median,kernel_ms_min,kernel_ms_max,"
+                      "e2e_pageable_ms_median,e2e_pinned_ms_median,peak_mem_mb,memgetinfo_mb,max_abs_err\n");
     }
 
-    bool is_check = (a.mode == "check");
-    bool is_bench = (a.mode == "bench");
+    int rows = 0, ok = 0;
 
-    if (fout && is_check) {
-        fprintf(fout, "config,version,pass,max_err\n");
-    }
-    if (fout && is_bench) {
-        fprintf(fout, "config,version,threads,v3cob,kernel_ms,e2e_pageable_ms,gflops_kernel,gflops_e2e\n");
-    }
-
-    int total_checks = 0, total_pass = 0;
+    bool any_gpu = std::any_of(versions.begin(), versions.end(), [](int v) { return v <= 4; });
+    if (bench && any_gpu) gpu_spinup(START_SPINUP_S);
 
     for (const auto& cfg : configs) {
         ConvParams p = make_params(cfg.N, cfg.Cin, cfg.H, cfg.W, cfg.Cout, cfg.K, cfg.S, cfg.P);
         printf("Config %s: N=%d Cin=%d H=%d W=%d Cout=%d K=%d S=%d P=%d => Ho=%d Wo=%d\n",
                cfg.id.c_str(), p.N, p.Cin, p.H, p.W, p.Cout, p.K, p.S, p.P, p.Ho, p.Wo);
 
-        // Load reference data for check mode
-        std::vector<float> h_in, h_w, h_ref;
-        if (is_check) {
-            std::string in_path  = a.datadir + "/" + cfg.id + "_input.bin";
-            std::string w_path   = a.datadir + "/" + cfg.id + "_weight.bin";
-            std::string ref_path = a.datadir + "/" + cfg.id + "_output.bin";
-            h_in  = load_bin(in_path,  input_elems(p));
-            h_w   = load_bin(w_path,   weight_elems(p));
-            h_ref = load_bin(ref_path, output_elems(p));
-        }
+        std::string base = a.data + "/" + cfg.id;
+        std::vector<float> h_in  = load_bin(base + "_input.bin",  input_elems(p));
+        std::vector<float> h_w   = load_bin(base + "_weight.bin", weight_elems(p));
+        std::vector<float> h_ref = load_bin(base + "_output.bin", output_elems(p));
 
         for (int ver : versions) {
-            bool is_gpu = (ver >= 1 && ver <= 4);
-            bool is_cpu = (ver == 6 || ver == 7);
-
-            // GPU memory check
-            if (is_gpu && !check_gpu_memory(p, ver)) {
-                printf("  %s: SKIPPED (OOM)\n", version_name(ver));
-                if (fout && is_check) fprintf(fout, "%s,%s,OOM,0\n", cfg.id.c_str(), version_name(ver));
-                if (fout && is_bench) fprintf(fout, "%s,%s,%d,%d,OOM,OOM,0,0\n",
-                    cfg.id.c_str(), version_name(ver), is_cpu ? a.threads : 0, a.v3cob);
-                continue;
-            }
-
-            if (is_check) {
-                // ---- CHECK MODE ----
-                std::vector<float> h_out(output_elems(p), 0.0f);
-                total_checks++;
-
-                if (is_gpu) {
-                    run_gpu_version(ver, p, h_in.data(), h_w.data(), h_out.data());
-                } else {
-                    run_cpu_version(ver, p, h_in.data(), h_w.data(), h_out.data(), a.threads);
-                }
-
-                float max_err = 0.0f;
-                bool pass = check_output(h_out.data(), h_ref.data(), output_elems(p),
-                                         0.001f, 0.001f, max_err);
-                if (pass) total_pass++;
-
-                printf("  %s: %s (max_err=%.6e)\n", version_name(ver),
-                       pass ? "PASS" : "FAIL", max_err);
-                if (fout) fprintf(fout, "%s,%s,%s,%.6e\n", cfg.id.c_str(), version_name(ver),
-                                  pass ? "PASS" : "FAIL", max_err);
-
-            } else if (is_bench) {
-                // ---- BENCH MODE ----
-                double flops = conv_flops(p);
-                int threads_used = is_cpu ? a.threads : 0;
-
-                if (is_gpu) {
-                    // Allocate device memory
-                    size_t in_bytes  = input_elems(p) * sizeof(float);
-                    size_t w_bytes   = weight_elems(p) * sizeof(float);
-                    size_t out_bytes = output_elems(p) * sizeof(float);
-                    size_t ws_bytes  = 0;
-                    switch (ver) {
-                        case 1: ws_bytes = v1_workspace_bytes(p); break;
-                        case 2: ws_bytes = v2_workspace_bytes(p); break;
-                        case 3: ws_bytes = v3_workspace_bytes(p); break;
-                        case 4: ws_bytes = v4_workspace_bytes(p); break;
-                    }
-                    float *d_in, *d_w, *d_out, *d_ws = nullptr;
-                    CUDA_CHECK(cudaMalloc(&d_in,  in_bytes));
-                    CUDA_CHECK(cudaMalloc(&d_w,   w_bytes));
-                    CUDA_CHECK(cudaMalloc(&d_out, out_bytes));
-                    if (ws_bytes > 0) CUDA_CHECK(cudaMalloc(&d_ws, ws_bytes));
-
-                    // Upload data (generate random for bench mode if reference not loaded)
-                    std::vector<float> tmp_in(input_elems(p));
-                    std::vector<float> tmp_w(weight_elems(p));
-                    for (size_t i = 0; i < tmp_in.size(); ++i) tmp_in[i] = (float)(rand() % 1000) / 500.0f - 1.0f;
-                    for (size_t i = 0; i < tmp_w.size();  ++i) tmp_w[i]  = (float)(rand() % 1000) / 500.0f - 1.0f;
-                    CUDA_CHECK(cudaMemcpy(d_in, tmp_in.data(), in_bytes, cudaMemcpyHostToDevice));
-                    CUDA_CHECK(cudaMemcpy(d_w,  tmp_w.data(),  w_bytes,  cudaMemcpyHostToDevice));
-
-                    double kernel_ms = bench_gpu_kernel(ver, p, d_in, d_w, d_out, d_ws,
-                                                        a.warmup, a.reps);
-
-                    std::vector<float> tmp_out(output_elems(p));
-                    double e2e_ms = bench_gpu_e2e_pageable(ver, p, tmp_in.data(), tmp_w.data(),
-                                                           tmp_out.data(), a.warmup, a.reps);
-
-                    double gflops_kernel = (flops / 1e9) / (kernel_ms / 1e3);
-                    double gflops_e2e    = (flops / 1e9) / (e2e_ms / 1e3);
-
-                    printf("  %s: kernel=%.3f ms (%.1f GFLOP/s), e2e_pageable=%.3f ms (%.1f GFLOP/s)\n",
-                           version_name(ver), kernel_ms, gflops_kernel, e2e_ms, gflops_e2e);
-                    if (fout) fprintf(fout, "%s,%s,%d,%d,%.4f,%.4f,%.2f,%.2f\n",
-                                      cfg.id.c_str(), version_name(ver), threads_used, a.v3cob,
-                                      kernel_ms, e2e_ms, gflops_kernel, gflops_e2e);
-
-                    if (d_ws) cudaFree(d_ws);
-                    cudaFree(d_out); cudaFree(d_w); cudaFree(d_in);
-
-                } else {
-                    // CPU bench
-                    std::vector<float> tmp_in(input_elems(p));
-                    std::vector<float> tmp_w(weight_elems(p));
-                    std::vector<float> tmp_out(output_elems(p));
-                    for (size_t i = 0; i < tmp_in.size(); ++i) tmp_in[i] = (float)(rand() % 1000) / 500.0f - 1.0f;
-                    for (size_t i = 0; i < tmp_w.size();  ++i) tmp_w[i]  = (float)(rand() % 1000) / 500.0f - 1.0f;
-
-                    double cpu_ms = bench_cpu(ver, p, tmp_in.data(), tmp_w.data(),
-                                              tmp_out.data(), a.threads, a.warmup, a.reps);
-                    double gflops = (flops / 1e9) / (cpu_ms / 1e3);
-
-                    printf("  %s (threads=%d): %.3f ms (%.1f GFLOP/s)\n",
-                           version_name(ver), a.threads, cpu_ms, gflops);
-                    if (fout) fprintf(fout, "%s,%s,%d,%d,%.4f,%.4f,%.2f,%.2f\n",
-                                      cfg.id.c_str(), version_name(ver), threads_used, a.v3cob,
-                                      cpu_ms, cpu_ms, gflops, gflops);
+            if (ver >= 1 && ver <= 4) {
+                Row r = do_gpu(ver, cfg, p, h_in.data(), h_w.data(), h_ref.data(),
+                               bench, a.warmup, a.reps);
+                write_row(fout, r);
+                ++rows; if (r.status == "OK") ++ok;
+            } else if (ver == 6) {
+                Row r = do_cpu(6, 0, cfg, p, h_in.data(), h_w.data(), h_ref.data(),
+                               bench, a.warmup, a.reps);
+                write_row(fout, r);
+                ++rows; if (r.status == "OK") ++ok;
+            } else {   // ver == 7: one row per thread count
+                for (int t : thread_counts) {
+                    Row r = do_cpu(7, t, cfg, p, h_in.data(), h_w.data(), h_ref.data(),
+                                   bench, a.warmup, a.reps);
+                    write_row(fout, r);
+                    ++rows; if (r.status == "OK") ++ok;
                 }
             }
         }
     }
 
-    if (is_check) {
-        printf("\n=== CHECK SUMMARY: %d / %d passed ===\n", total_pass, total_checks);
-    }
-
+    printf("\n=== SUMMARY: %d / %d rows OK ===\n", ok, rows);
     if (fout) fclose(fout);
-    if (need_v4) v4_destroy();
-
-    return (is_check && total_pass < total_checks) ? 1 : 0;
+    v4_destroy();
+    return (ok == rows) ? 0 : 1;
 }

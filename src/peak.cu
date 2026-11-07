@@ -1,157 +1,146 @@
 // src/peak.cu -- peak bandwidth and compute benchmarks (owner: Faizan). Section 4.11.
-// Measures:
-//   1. Peak memory bandwidth (GB/s) using a float4 grid-stride copy kernel
-//   2. Peak compute throughput (GFLOP/s) using fmaf in a tight loop
+// Writes results/peaks.csv with header metric,value and the rows
+// peak_bandwidth_gbs and peak_gflops. Each is the highest of the 20 timed runs.
 #include "common.h"
 #include <cuda_runtime.h>
 #include <vector>
 #include <algorithm>
+#include <chrono>
+
+// Written only if the impossible sum below occurs, so the loop cannot be removed.
+__device__ float g_peak_sink = 0.0f;
 
 // ---------------------------------------------------------------------------
-// Bandwidth kernel: copy float4 arrays with grid-stride loop
+// Bandwidth kernel: copy float4 elements with a grid-stride loop
 // ---------------------------------------------------------------------------
 __global__ void copy_kernel(const float4* __restrict__ src, float4* __restrict__ dst, size_t n4) {
-    size_t idx = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
-    size_t stride = (size_t)gridDim.x * blockDim.x;
-    for (size_t i = idx; i < n4; i += stride) {
+    const size_t stride = (size_t)gridDim.x * blockDim.x;
+    for (size_t i = (size_t)blockIdx.x * blockDim.x + threadIdx.x; i < n4; i += stride) {
         dst[i] = src[i];
     }
 }
 
 // ---------------------------------------------------------------------------
-// Compute kernel: fmaf loop. Each thread does ITERS fused multiply-adds.
-// The result is written to prevent the compiler from optimising it away.
+// Compute kernel: 8 independent accumulators, ITERS fused multiply-adds on each.
 // ---------------------------------------------------------------------------
-static const int COMPUTE_ITERS = 4096;
+__global__ void compute_kernel(int iters) {
+    const float seed = (float)(blockIdx.x * blockDim.x + threadIdx.x);
+    float a0 = seed + 1.0f, a1 = seed + 2.0f, a2 = seed + 3.0f, a3 = seed + 4.0f;
+    float a4 = seed + 5.0f, a5 = seed + 6.0f, a6 = seed + 7.0f, a7 = seed + 8.0f;
 
-__global__ void compute_kernel(float* __restrict__ out, int n) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= n) return;
-    float a = 1.0f, b = 0.5f, c = 0.0f;
-    #pragma unroll 32
-    for (int i = 0; i < COMPUTE_ITERS; ++i) {
-        c = fmaf(a, b, c);   // 2 FLOPs (1 mul + 1 add)
+    for (int i = 0; i < iters; ++i) {
+        a0 = fmaf(a0, 0.9999f, 0.0001f);
+        a1 = fmaf(a1, 0.9999f, 0.0001f);
+        a2 = fmaf(a2, 0.9999f, 0.0001f);
+        a3 = fmaf(a3, 0.9999f, 0.0001f);
+        a4 = fmaf(a4, 0.9999f, 0.0001f);
+        a5 = fmaf(a5, 0.9999f, 0.0001f);
+        a6 = fmaf(a6, 0.9999f, 0.0001f);
+        a7 = fmaf(a7, 0.9999f, 0.0001f);
     }
-    out[idx] = c;
+
+    float sum = a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7;
+    if (sum == -1.0f) g_peak_sink = sum;
 }
 
 // ---------------------------------------------------------------------------
-// run_peaks: measure and write CSV
+// gpu_spinup: keep the GPU busy so it has left its idle clocks. A few warm-up
+// runs of a short kernel last milliseconds, which is too short for that.
+// Alternates compute and memory traffic: the core clock and the memory clock
+// ramp up separately, and compute load alone leaves the memory clock low.
 // ---------------------------------------------------------------------------
-void run_peaks(const char* out_csv) {
-    printf("=== Peak Hardware Benchmarks ===\n");
-
+void gpu_spinup(double seconds) {
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
-    int clockRate = 0, memoryClockRate = 0;
-    cudaDeviceGetAttribute(&clockRate, cudaDevAttrClockRate, 0);
-    cudaDeviceGetAttribute(&memoryClockRate, cudaDevAttrMemoryClockRate, 0);
-    printf("Device: %s\n", prop.name);
-    printf("SMs: %d, Clock: %d MHz, Mem Clock: %d MHz, Bus Width: %d bits\n",
-           prop.multiProcessorCount, clockRate / 1000,
-           memoryClockRate / 1000, prop.memoryBusWidth);
-
-    // Theoretical peaks
-    double theo_bw_gbps = 2.0 * memoryClockRate * 1e3 * (prop.memoryBusWidth / 8.0) / 1e9;
-    printf("Theoretical peak bandwidth: %.1f GB/s\n", theo_bw_gbps);
-
-    int warmup = 5, reps = 20;
-
-    // --- Bandwidth benchmark: 256 MiB buffer ---
-    {
-        size_t bytes = 256 * 1024 * 1024;  // 256 MiB
-        size_t n4 = bytes / sizeof(float4);
-        float4 *d_src, *d_dst;
-        CUDA_CHECK(cudaMalloc(&d_src, bytes));
-        CUDA_CHECK(cudaMalloc(&d_dst, bytes));
-        CUDA_CHECK(cudaMemset(d_src, 1, bytes));
-
-        int threads = 256;
-        int blocks = (int)std::min(n4 / threads, (size_t)prop.multiProcessorCount * 8);
-
-        // Warmup
-        for (int i = 0; i < warmup; ++i) {
-            copy_kernel<<<blocks, threads>>>(d_src, d_dst, n4);
-        }
+    const int blocks = 8 * prop.multiProcessorCount;
+    const size_t bytes = (size_t)256 << 20;
+    float4 *src = nullptr, *dst = nullptr;
+    CUDA_CHECK(cudaMalloc(&src, bytes));
+    CUDA_CHECK(cudaMalloc(&dst, bytes));
+    CUDA_CHECK(cudaMemset(src, 1, bytes));
+    auto t0 = std::chrono::steady_clock::now();
+    while (std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() < seconds) {
+        compute_kernel<<<blocks, 256>>>(8192);
+        copy_kernel<<<1024, 256>>>(src, dst, bytes / sizeof(float4));
         CUDA_CHECK(cudaDeviceSynchronize());
-
-        // Timed runs
-        cudaEvent_t start, stop;
-        CUDA_CHECK(cudaEventCreate(&start));
-        CUDA_CHECK(cudaEventCreate(&stop));
-
-        std::vector<float> times(reps);
-        for (int i = 0; i < reps; ++i) {
-            CUDA_CHECK(cudaEventRecord(start));
-            copy_kernel<<<blocks, threads>>>(d_src, d_dst, n4);
-            CUDA_CHECK(cudaEventRecord(stop));
-            CUDA_CHECK(cudaEventSynchronize(stop));
-            CUDA_CHECK(cudaEventElapsedTime(&times[i], start, stop));
-        }
-
-        std::sort(times.begin(), times.end());
-        float median_ms = times[reps / 2];
-        double bw_gbps = 2.0 * bytes / (median_ms / 1e3) / 1e9;  // read + write
-
-        printf("Measured bandwidth: %.1f GB/s (median %.3f ms for 256 MiB copy)\n",
-               bw_gbps, median_ms);
-
-        CUDA_CHECK(cudaEventDestroy(start));
-        CUDA_CHECK(cudaEventDestroy(stop));
-        cudaFree(d_dst);
-        cudaFree(d_src);
-
-        // --- Compute benchmark ---
-        int compute_threads = 256;
-        int compute_blocks = prop.multiProcessorCount * 8;
-        int total_threads = compute_blocks * compute_threads;
-        float* d_out;
-        CUDA_CHECK(cudaMalloc(&d_out, total_threads * sizeof(float)));
-
-        for (int i = 0; i < warmup; ++i) {
-            compute_kernel<<<compute_blocks, compute_threads>>>(d_out, total_threads);
-        }
-        CUDA_CHECK(cudaDeviceSynchronize());
-
-        CUDA_CHECK(cudaEventCreate(&start));
-        CUDA_CHECK(cudaEventCreate(&stop));
-
-        std::vector<float> ctimes(reps);
-        for (int i = 0; i < reps; ++i) {
-            CUDA_CHECK(cudaEventRecord(start));
-            compute_kernel<<<compute_blocks, compute_threads>>>(d_out, total_threads);
-            CUDA_CHECK(cudaEventRecord(stop));
-            CUDA_CHECK(cudaEventSynchronize(stop));
-            CUDA_CHECK(cudaEventElapsedTime(&ctimes[i], start, stop));
-        }
-
-        std::sort(ctimes.begin(), ctimes.end());
-        float compute_median_ms = ctimes[reps / 2];
-        // Each thread does COMPUTE_ITERS fmaf = 2 FLOPs each
-        double total_flops = (double)total_threads * COMPUTE_ITERS * 2.0;
-        double gflops = total_flops / (compute_median_ms / 1e3) / 1e9;
-
-        printf("Measured compute: %.1f GFLOP/s (median %.3f ms)\n", gflops, compute_median_ms);
-
-        // Write CSV
-        FILE* f = fopen(out_csv, "w");
-        if (!f) { fprintf(stderr, "Cannot open %s for writing\n", out_csv); exit(1); }
-        fprintf(f, "metric,value,unit\n");
-        fprintf(f, "device,%s,\n", prop.name);
-        fprintf(f, "sm_count,%d,\n", prop.multiProcessorCount);
-        fprintf(f, "clock_mhz,%d,MHz\n", clockRate / 1000);
-        fprintf(f, "mem_clock_mhz,%d,MHz\n", memoryClockRate / 1000);
-        fprintf(f, "bus_width,%d,bits\n", prop.memoryBusWidth);
-        fprintf(f, "theo_bw,%.2f,GB/s\n", theo_bw_gbps);
-        fprintf(f, "measured_bw,%.2f,GB/s\n", bw_gbps);
-        fprintf(f, "bw_median_ms,%.4f,ms\n", median_ms);
-        fprintf(f, "measured_compute,%.2f,GFLOP/s\n", gflops);
-        fprintf(f, "compute_median_ms,%.4f,ms\n", compute_median_ms);
-        fclose(f);
-        printf("Results written to %s\n", out_csv);
-
-        CUDA_CHECK(cudaEventDestroy(start));
-        CUDA_CHECK(cudaEventDestroy(stop));
-        cudaFree(d_out);
     }
+    CUDA_CHECK(cudaFree(dst));
+    CUDA_CHECK(cudaFree(src));
+}
+
+// ---------------------------------------------------------------------------
+// run_peaks
+// ---------------------------------------------------------------------------
+static const int WARMUP = 5, REPS = 20;
+static const double SPINUP_S = 3.0;
+
+// Runs launch() 5 + 20 times and returns the shortest timed run, in ms.
+template <class F>
+static double fastest_ms(F launch) {
+    gpu_spinup(SPINUP_S);
+
+    cudaEvent_t start, stop;
+    CUDA_CHECK(cudaEventCreate(&start));
+    CUDA_CHECK(cudaEventCreate(&stop));
+
+    for (int i = 0; i < WARMUP; ++i) launch();
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    double best = 1e30;
+    for (int i = 0; i < REPS; ++i) {
+        CUDA_CHECK(cudaEventRecord(start));
+        launch();
+        CUDA_CHECK(cudaEventRecord(stop));
+        CUDA_CHECK(cudaEventSynchronize(stop));
+        float ms = 0.0f;
+        CUDA_CHECK(cudaEventElapsedTime(&ms, start, stop));
+        CUDA_CHECK(cudaGetLastError());
+        best = std::min(best, (double)ms);
+    }
+    CUDA_CHECK(cudaEventDestroy(start));
+    CUDA_CHECK(cudaEventDestroy(stop));
+    return best;
+}
+
+void run_peaks(const char* out_csv) {
+    cudaDeviceProp prop;
+    CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
+    const int sms = prop.multiProcessorCount;
+
+    int clock_khz = 0, mem_clock_khz = 0;
+    cudaDeviceGetAttribute(&clock_khz, cudaDevAttrClockRate, 0);
+    cudaDeviceGetAttribute(&mem_clock_khz, cudaDevAttrMemoryClockRate, 0);
+    printf("Device: %s, SMs: %d, clock %d MHz, memory clock %d MHz, bus %d bits\n",
+           prop.name, sms, clock_khz / 1000, mem_clock_khz / 1000, prop.memoryBusWidth);
+
+    // --- Bandwidth: two buffers of 64 x 2^20 floats (256 MiB each) -----------
+    const size_t floats = (size_t)64 << 20;
+    const size_t bytes  = floats * sizeof(float);
+    const size_t n4     = floats / 4;
+    float4 *src = nullptr, *dst = nullptr;
+    CUDA_CHECK(cudaMalloc(&src, bytes));
+    CUDA_CHECK(cudaMalloc(&dst, bytes));
+    CUDA_CHECK(cudaMemset(src, 1, bytes));
+
+    double bw_ms = fastest_ms([&]() { copy_kernel<<<1024, 256>>>(src, dst, n4); });
+    double bw_gbs = 536870912.0 / (bw_ms * 1e6);    // read + write
+    printf("Peak bandwidth: %.2f GB/s (fastest run %.4f ms)\n", bw_gbs, bw_ms);
+
+    CUDA_CHECK(cudaFree(dst));
+    CUDA_CHECK(cudaFree(src));
+
+    // --- Compute --------------------------------------------------------------
+    const int blocks = 8 * sms, iters = 4096;
+    double flops = (double)blocks * 256 * iters * 8 * 2;
+    double c_ms = fastest_ms([&]() { compute_kernel<<<blocks, 256>>>(iters); });
+    double gflops = flops / (c_ms * 1e6);
+    printf("Peak compute: %.2f GFLOP/s (fastest run %.4f ms, %d blocks)\n", gflops, c_ms, blocks);
+
+    FILE* f = fopen(out_csv, "w");
+    if (!f) { fprintf(stderr, "Cannot open %s for writing\n", out_csv); exit(1); }
+    fprintf(f, "metric,value\n");
+    fprintf(f, "peak_bandwidth_gbs,%.4f\n", bw_gbs);
+    fprintf(f, "peak_gflops,%.4f\n", gflops);
+    fclose(f);
+    printf("Results written to %s\n", out_csv);
 }

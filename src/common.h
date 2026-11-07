@@ -50,6 +50,7 @@ void   v4_run(const ConvParams& p, const float* in, const float* w, float* out, 
 void   im2col_launch(const ConvParams& p, const float* in, float* col);
 // in peak.cu:
 void   run_peaks(const char* out_csv);
+void   gpu_spinup(double seconds);   // loads the GPU so clocks are up before anything is timed
 
 // CPU versions. All pointers are HOST pointers.
 void v6_run(const ConvParams& p, const float* in, const float* w, float* out);
