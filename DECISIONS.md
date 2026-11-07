@@ -16,6 +16,7 @@ Every decision agreed in the group chat, with its date.
 | 2026-11-07 | Set A CPU run was paused for about 14 minutes during row A08 V6, so that row's `kernel_ms_max` (884,113 ms) is not a real timing. Its median and min are unaffected. |
 | 2026-11-07 | V3 re-tuned with the fixed harness: sums 41.48 ms ($CO_B=4$), 32.03 ms ($CO_B=8$), 29.77 ms ($CO_B=16$). $CO_B=16$ is 7.1% faster than $CO_B=8$, so it stays the default. |
 | 2026-11-07 | All the changes and deviations recorded on this date were reviewed and approved by the group. |
+| 2026-11-07 | Final report written in LaTeX (`report/report.tex`, built with XeLaTeX) rather than as Word parts, at the user's request. House format kept. Figures are scaled to the 6.27 in text width of A4 with 1 inch margins, not 6.5 in. Table numbers are generated from the CSVs by `python/make_report_tables.py`, and `python/check_report_numbers.py` checks the prose. |
 | 2026-11-07 | Final GPU results are from one pass. A second full pass is stored in `results/repeat/` and used only for `tables/tab_repeatability.csv`. Nsight Compute (optional) was not run: `ncu` is not in this CUDA install. Power limit read through `nvidia-smi -q -d POWER`: 42.15 to 50 W across sessions. |
 
 

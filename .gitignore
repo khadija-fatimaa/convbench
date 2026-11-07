@@ -7,3 +7,7 @@ scratch/
 *.pdb
 convbench
 __pycache__/
+report/*.aux
+report/*.log
+report/*.out
+report/*.toc

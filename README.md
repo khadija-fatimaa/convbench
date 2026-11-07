@@ -45,6 +45,14 @@ Follow Section 6 of the execution plan. Set A and Set B data must exist first.
     py -3.11 python/sanity_checks.py
     py -3.11 python/repeatability.py
 
+## Build the report
+
+    py -3.11 python/make_report_tables.py
+    py -3.11 python/check_report_numbers.py
+    cd report
+    xelatex report.tex
+    xelatex report.tex
+
 ## Rules
 
 Edit only the files you own. Shared files (src/common.h, src/main.cu, configs/, the CSV format) change only after all three members agree in the group chat. Run git pull before starting work and before every push. Never push code that does not build. Only Faizan commits to results/.

@@ -20,7 +20,7 @@
 | **Step 6** | CPU Benchmark Sweeps | Faizan | **COMPLETED** | `results/A_cpu.csv`, `results/B_cpu.csv` |
 | **Step 7** | Final GPU Benchmark Sweeps | Faizan | **COMPLETED** | `results/A_gpu.csv`, `B_gpu.csv`, `A_v5.csv`, `B_v5.csv`, repeat pass in `results/repeat/` |
 | **Step 8** | Analysis, Roofline & Plots | Mania & Khadija | **COMPLETED** | `python/roofline.py`, `plots.py`, `sanity_checks.py`, `repeatability.py`, `figures/fig01`-`fig07`, `tables/*` |
-| **Step 9** | Final Report Assembly & Submission | All | **NEXT UP** | Word documents in `report/`, assembled final paper, clean zip bundle |
+| **Step 9** | Final Report Assembly & Submission | All | **REPORT DRAFTED** | `report/report.tex`, `report/report.pdf`, `convbench_code.zip`; final read-through and submission remain |
 
 ---
 
@@ -114,8 +114,8 @@ $CO_B = 16$ is 7.1% faster than $CO_B = 8$, which is outside the 2% rule, so it 
 ## 8. Next Actions
 
 1. Done: the group reviewed and approved the results and the changes listed in [DECISIONS.md](DECISIONS.md).
-2. Draft and assemble the report sections (Table 9). Methodology must state the deviations recorded on 2026-11-07.
-3. Done: code package built (`convbench_code.zip`, Section 9.3). Rebuild it once `report/` is filled.
+2. Done: report drafted in LaTeX (`report/report.pdf`, 23 pages). The group still needs to read it, and the Literature Review should be checked against the Phase 1 document.
+3. Done: code package built (`convbench_code.zip`, Section 9.3), including the report.
 
 ---
 
